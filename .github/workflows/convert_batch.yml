@@ -16,8 +16,9 @@ on:
 
 jobs:
   convert:
-    # Attempt to request GPU runners if available, fallback to standard runner
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
