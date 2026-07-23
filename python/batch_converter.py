@@ -10,6 +10,7 @@ import argparse
 import urllib.request
 import urllib.error
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "converted_manifest.json")
@@ -164,7 +165,9 @@ def main():
     parser.add_argument("--batch-size", type=int, default=20, help="Number of file pairs to convert.")
     parser.add_argument("--model", type=str, default="qwen2.5-coder:7b", help="Ollama model name.")
     parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama API base URL.")
+    parser.add_argument("--workers", type=int, default=1, help="Number of parallel conversion workers.")
     args = parser.parse_args()
+    args.workers = max(1, args.workers)
 
     manifest = load_manifest()
     candidates = find_candidate_file_groups(manifest, max_count=args.batch_size)
@@ -173,20 +176,46 @@ def main():
         print("No new C/C++ file groups found to convert!")
         return
 
-    print(f"Starting bulk conversion of {len(candidates)} file groups using model [{args.model}]...")
+    print(
+        f"Starting bulk conversion of {len(candidates)} file groups using model "
+        f"[{args.model}] with {args.workers} worker(s)..."
+    )
 
     converted_count = 0
-    for group_info in candidates:
-        key_str = group_info['key_str']
-        success = convert_file_group(group_info, args)
+
+    def record_result(key_str, success):
+        nonlocal converted_count
         if success:
-            manifest["processed_files"].append(key_str)
+            if key_str not in manifest["processed_files"]:
+                manifest["processed_files"].append(key_str)
             manifest["total_converted"] = len(manifest["processed_files"])
             converted_count += 1
         else:
-            manifest["failed_files"].append(key_str)
+            if key_str not in manifest["failed_files"]:
+                manifest["failed_files"].append(key_str)
 
         save_manifest(manifest)
+
+    if args.workers == 1:
+        for group_info in candidates:
+            key_str = group_info['key_str']
+            success = convert_file_group(group_info, args)
+            record_result(key_str, success)
+    else:
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            future_to_group = {
+                executor.submit(convert_file_group, group_info, args): group_info
+                for group_info in candidates
+            }
+            for future in as_completed(future_to_group):
+                group_info = future_to_group[future]
+                key_str = group_info['key_str']
+                try:
+                    success = future.result()
+                except Exception as e:
+                    print(f"Error converting {key_str}: {e}")
+                    success = False
+                record_result(key_str, success)
 
     print(f"\nBulk conversion finished. Successfully converted {converted_count}/{len(candidates)} groups.")
 
