@@ -50,8 +50,8 @@ jobs:
       - name: Clone Blender Source Code (v5.2.0)
         run: |
           if [ ! -d "blender" ]; then
-            echo "Cloning Blender source code..."
-            git clone --depth 1 https://projects.blender.org/blender/blender.git blender || git clone --depth 1 https://github.com/blender/blender.git blender
+            echo "Cloning Blender source code v5.2.0..."
+            git clone --depth 1 --branch v5.2.0 https://projects.blender.org/blender/blender.git blender || git clone --depth 1 --branch v5.2.0 https://github.com/blender/blender.git blender
           fi
 
       - name: Run Batch Converter Script
