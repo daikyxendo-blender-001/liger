@@ -10,6 +10,8 @@ import argparse
 import urllib.request
 import urllib.error
 import re
+import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -40,7 +42,7 @@ def save_manifest(manifest):
     with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-def call_ollama(prompt, model="qwen2.5-coder:7b", ollama_url="http://localhost:11434", timeout=300, retries=0):
+def call_ollama(prompt, model="qwen2.5-coder:7b", ollama_url="http://localhost:11434", timeout=300):
     url = f"{ollama_url.rstrip('/')}/api/generate"
     payload = {
         "model": model,
@@ -51,31 +53,50 @@ def call_ollama(prompt, model="qwen2.5-coder:7b", ollama_url="http://localhost:1
         }
     }
     data = json.dumps(payload).encode("utf-8")
-    attempts = retries + 1
-    for attempt in range(1, attempts + 1):
-        try:
-            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-            print(f"Calling Ollama API ({attempt}/{attempts}, timeout={timeout}s)...")
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                resp_body = response.read().decode("utf-8")
-                res_json = json.loads(resp_body)
-                return res_json.get("response", "")
-        except Exception as e:
-            print(f"Error calling Ollama API ({url}) on attempt {attempt}/{attempts}: {e}")
-            if attempt < attempts:
-                time.sleep(min(30, 5 * attempt))
+    try:
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            resp_body = response.read().decode("utf-8")
+            res_json = json.loads(resp_body)
+            return res_json.get("response", "")
+    except Exception as e:
+        print(f"Error calling Ollama API ({url}): {e}")
+        return None
 
+def extract_rust_code_block(llm_output):
+    """Extract code inside ```rust ... ``` block if present."""
+    match = re.search(r"```(?:rust|rs)\s*(.*?)\s*```", llm_output, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
     return None
 
-def extract_code_block(llm_output):
-    """Extract code inside ```rust ... ``` block if present."""
-    match = re.search(r"```rust\s*(.*?)\s*```", llm_output, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    match = re.search(r"```\s*(.*?)\s*```", llm_output, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return llm_output.strip()
+def validate_rust_code(rust_code):
+    if not re.search(r"\b(fn|struct|enum|impl|trait|use|mod|const|type|pub)\b", rust_code):
+        return False, "output does not look like Rust code"
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".rs", delete=False) as f:
+            tmp_path = f.name
+            f.write(rust_code)
+
+        result = subprocess.run(
+            ["rustfmt", "--edition", "2024", "--check", tmp_path],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        if result.returncode == 0:
+            return True, None
+
+        detail = " ".join(result.stdout.strip().splitlines()[:3])
+        return False, f"rustfmt --check failed: {detail}"
+    except FileNotFoundError:
+        return False, "rustfmt is not installed"
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 def find_candidate_file_groups(manifest, max_count=20):
     processed = set(manifest.get("processed_files", []))
@@ -138,20 +159,48 @@ def convert_file_group(group_info, args):
         print(f"Skipping empty group {key_str}")
         return False
 
-    prompt = f"{SHORT_SYSTEM_PROMPT}\n\nC/C++ Source Code for [{key_str}]:\n```cpp\n{combined_code}\n```"
+    base_prompt = f"{SHORT_SYSTEM_PROMPT}\n\nC/C++ Source Code for [{key_str}]:\n```cpp\n{combined_code}\n```"
+    attempts = args.retries + 1
+    rust_code = None
+    last_error = None
 
-    llm_response = call_ollama(
-        prompt,
-        model=args.model,
-        ollama_url=args.ollama_url,
-        timeout=args.request_timeout,
-        retries=args.retries,
-    )
-    if not llm_response:
-        print(f"Failed to get response for {key_str}")
+    for attempt in range(1, attempts + 1):
+        prompt = base_prompt
+        if last_error:
+            prompt += (
+                "\n\nPrevious response was rejected because: "
+                f"{last_error}\n"
+                "Return exactly one ```rust fenced code block with syntactically valid Rust. "
+                "Do not return prose, JSON, Markdown lists, or C/C++."
+            )
+
+        print(f"Calling Ollama API for {key_str} ({attempt}/{attempts}, timeout={args.request_timeout}s)...")
+        llm_response = call_ollama(
+            prompt,
+            model=args.model,
+            ollama_url=args.ollama_url,
+            timeout=args.request_timeout,
+        )
+        if not llm_response:
+            last_error = "empty Ollama response"
+        else:
+            rust_code = extract_rust_code_block(llm_response)
+            if rust_code is None:
+                last_error = "missing ```rust fenced code block"
+            else:
+                is_valid, validation_error = validate_rust_code(rust_code)
+                if is_valid:
+                    break
+                last_error = validation_error
+                rust_code = None
+
+        print(f"Rejected output for {key_str}: {last_error}")
+        if attempt < attempts:
+            time.sleep(min(30, 5 * attempt))
+
+    if rust_code is None:
+        print(f"Failed to produce valid Rust for {key_str}: {last_error}")
         return False
-
-    rust_code = extract_code_block(llm_response)
 
     # Determine target output path in src/
     rel_dir = group_info['key_str'].rsplit('/', 1)[0]
@@ -205,6 +254,8 @@ def main():
         if success:
             if key_str not in manifest["processed_files"]:
                 manifest["processed_files"].append(key_str)
+            if key_str in manifest["failed_files"]:
+                manifest["failed_files"].remove(key_str)
             manifest["total_converted"] = len(manifest["processed_files"])
             converted_count += 1
         else:
