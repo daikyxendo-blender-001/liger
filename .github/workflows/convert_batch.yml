@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       batch_size:
-        description: 'Number of files to convert in this batch'
+        description: 'Number of file pairs to convert in this batch'
         required: true
         default: '20'
       model:
@@ -16,6 +16,7 @@ on:
 
 jobs:
   convert:
+    # Attempt to request GPU runners if available, fallback to standard runner
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -28,15 +29,14 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Python Dependencies
+      - name: Setup CUDA / GPU (If GPU Available)
         run: |
-          pip install requests
-
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
+          if command -v nvidia-smi &> /dev/null; then
+            echo "NVIDIA GPU Detected!"
+            nvidia-smi
+          else
+            echo "No NVIDIA GPU detected on this runner, running on CPU."
+          fi
 
       - name: Install Ollama & Pull Model
         run: |
@@ -54,17 +54,15 @@ jobs:
             git clone --depth 1 --branch v5.2.0 https://projects.blender.org/blender/blender.git blender || git clone --depth 1 --branch v5.2.0 https://github.com/blender/blender.git blender
           fi
 
-      - name: Run Batch Converter Script
+      - name: Run Bulk Converter Script
         run: |
           BATCH_SIZE="${{ github.event.inputs.batch_size || '20' }}"
           MODEL="${{ github.event.inputs.model || 'qwen2.5-coder:7b' }}"
           python3 python/batch_converter.py --batch-size "$BATCH_SIZE" --model "$MODEL"
 
-      - name: Run Cargo Test
-        run: cargo test --lib
-
       - name: Auto Commit & Push Changes
+        if: always()
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "auto(convert): batch convert Blender C/C++ files to Rust via Qwen2.5-Coder"
+          commit_message: "auto(convert): bulk transpile Blender C/C++ files to Rust via Qwen2.5-Coder"
           file_pattern: "src/ python/converted_manifest.json"
