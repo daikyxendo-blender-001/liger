@@ -6,11 +6,11 @@ on:
       batch_size:
         description: 'Number of file pairs to convert in this batch'
         required: true
-        default: '20'
+        default: '5'
       model:
         description: 'Ollama model name'
         required: true
-        default: 'qwen2.5-coder:7b'
+        default: 'qwen3-coder:30b'
       workers:
         description: 'Number of parallel Ollama conversion workers'
         required: true
@@ -18,11 +18,11 @@ on:
       request_timeout:
         description: 'Ollama request timeout in seconds'
         required: true
-        default: '900'
+        default: '1800'
       retries:
         description: 'Number of retry attempts per file after an Ollama failure'
         required: true
-        default: '1'
+        default: '2'
   schedule:
     - cron: '0 0 * * *' # Run daily at midnight
 
@@ -49,7 +49,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ollama
-          key: ollama-${{ runner.os }}-${{ github.event.inputs.model || 'qwen2.5-coder:7b' }}
+          key: ollama-${{ runner.os }}-${{ github.event.inputs.model || 'qwen3-coder:30b' }}
           restore-keys: |
             ollama-${{ runner.os }}-
 
@@ -73,7 +73,7 @@ jobs:
           curl -fsSL https://ollama.com/install.sh | sh
           nohup ollama serve > ollama.log 2>&1 &
           sleep 5
-          MODEL="${{ github.event.inputs.model || 'qwen2.5-coder:7b' }}"
+          MODEL="${{ github.event.inputs.model || 'qwen3-coder:30b' }}"
           echo "Pulling model $MODEL..."
           ollama pull "$MODEL"
 
@@ -86,11 +86,11 @@ jobs:
 
       - name: Run Bulk Converter Script
         run: |
-          BATCH_SIZE="${{ github.event.inputs.batch_size || '20' }}"
-          MODEL="${{ github.event.inputs.model || 'qwen2.5-coder:7b' }}"
+          BATCH_SIZE="${{ github.event.inputs.batch_size || '5' }}"
+          MODEL="${{ github.event.inputs.model || 'qwen3-coder:30b' }}"
           WORKERS="${{ github.event.inputs.workers || '1' }}"
-          REQUEST_TIMEOUT="${{ github.event.inputs.request_timeout || '900' }}"
-          RETRIES="${{ github.event.inputs.retries || '1' }}"
+          REQUEST_TIMEOUT="${{ github.event.inputs.request_timeout || '1800' }}"
+          RETRIES="${{ github.event.inputs.retries || '2' }}"
           python3 python/batch_converter.py \
             --batch-size "$BATCH_SIZE" \
             --model "$MODEL" \
@@ -102,5 +102,5 @@ jobs:
         if: always()
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "auto(convert): bulk transpile Blender C/C++ files to Rust via Qwen2.5-Coder"
+          commit_message: "auto(convert): bulk transpile Blender C/C++ files to Rust via Ollama"
           file_pattern: "src/ python/converted_manifest.json"
