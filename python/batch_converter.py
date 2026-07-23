@@ -42,7 +42,7 @@ def save_manifest(manifest):
     with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-def call_ollama(prompt, model="deepseek-coder-v2:16b", ollama_url="http://localhost:11434", timeout=300):
+def call_ollama(prompt, model="qwen2.5-coder:14b", ollama_url="http://localhost:11434", timeout=300):
     url = f"{ollama_url.rstrip('/')}/api/generate"
     payload = {
         "model": model,
@@ -225,7 +225,7 @@ def convert_file_group(group_info, args):
 def main():
     parser = argparse.ArgumentParser(description="Bulk convert Blender C/C++ pairs (.h + .cpp) to Rust.")
     parser.add_argument("--batch-size", type=int, default=20, help="Number of file pairs to convert.")
-    parser.add_argument("--model", type=str, default="deepseek-coder-v2:16b", help="Ollama model name.")
+    parser.add_argument("--model", type=str, default="qwen2.5-coder:14b", help="Ollama model name.")
     parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama API base URL.")
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel conversion workers.")
     parser.add_argument("--request-timeout", type=int, default=300, help="Ollama request timeout in seconds.")

@@ -10,7 +10,7 @@ on:
       model:
         description: 'Ollama model name'
         required: true
-        default: 'deepseek-coder-v2:16b'
+        default: 'qwen2.5-coder:14b'
       workers:
         description: 'Number of parallel Ollama conversion workers'
         required: true
@@ -49,7 +49,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ollama
-          key: ollama-${{ runner.os }}-${{ github.event.inputs.model || 'deepseek-coder-v2:16b' }}
+          key: ollama-${{ runner.os }}-${{ github.event.inputs.model || 'qwen2.5-coder:14b' }}
           restore-keys: |
             ollama-${{ runner.os }}-
 
@@ -74,11 +74,11 @@ jobs:
 
       - name: Guard Heavy Local Models
         run: |
-          MODEL="${{ github.event.inputs.model || 'deepseek-coder-v2:16b' }}"
+          MODEL="${{ github.event.inputs.model || 'qwen2.5-coder:14b' }}"
           if ! command -v nvidia-smi &> /dev/null; then
             case "$MODEL" in
               qwen3-coder:30b|qwen3-coder:480b|qwen3-coder-next*|qwen2.5-coder:32b)
-                echo "::error::Model $MODEL is too large for GitHub-hosted CPU runners. Use a self-hosted runner with enough RAM/VRAM, or choose deepseek-coder-v2:16b / qwen2.5-coder:14b."
+                echo "::error::Model $MODEL is too large for GitHub-hosted CPU runners. Use a self-hosted runner with enough RAM/VRAM, or choose qwen2.5-coder:14b / qwen2.5-coder:7b."
                 exit 1
                 ;;
             esac
@@ -89,7 +89,7 @@ jobs:
           curl -fsSL https://ollama.com/install.sh | sh
           nohup ollama serve > ollama.log 2>&1 &
           sleep 5
-          MODEL="${{ github.event.inputs.model || 'deepseek-coder-v2:16b' }}"
+          MODEL="${{ github.event.inputs.model || 'qwen2.5-coder:14b' }}"
           echo "Pulling model $MODEL..."
           ollama pull "$MODEL"
 
@@ -103,7 +103,7 @@ jobs:
       - name: Run Bulk Converter Script
         run: |
           BATCH_SIZE="${{ github.event.inputs.batch_size || '5' }}"
-          MODEL="${{ github.event.inputs.model || 'deepseek-coder-v2:16b' }}"
+          MODEL="${{ github.event.inputs.model || 'qwen2.5-coder:14b' }}"
           WORKERS="${{ github.event.inputs.workers || '1' }}"
           REQUEST_TIMEOUT="${{ github.event.inputs.request_timeout || '1800' }}"
           RETRIES="${{ github.event.inputs.retries || '2' }}"
