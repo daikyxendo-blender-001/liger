@@ -1,6 +1,27 @@
 {
-  "processed_files": [],
+  "processed_files": [
+    "blender/source/blender/animrig/intern/action",
+    "blender/source/blender/animrig/intern/action_iterators",
+    "blender/source/blender/animrig/intern/action_iterators_test",
+    "blender/source/blender/animrig/intern/action_legacy",
+    "blender/source/blender/animrig/intern/action_legacy_test",
+    "blender/source/blender/animrig/intern/action_runtime",
+    "blender/source/blender/animrig/intern/action_selection",
+    "blender/source/blender/animrig/intern/action_test",
+    "blender/source/blender/animrig/intern/anim_rna",
+    "blender/source/blender/animrig/intern/anim_rna_test",
+    "blender/source/blender/animrig/intern/animdata",
+    "blender/source/blender/animrig/intern/armature",
+    "blender/source/blender/animrig/intern/bone_collections",
+    "blender/source/blender/animrig/intern/bone_collections_test",
+    "blender/source/blender/animrig/intern/bonecolor",
+    "blender/source/blender/animrig/intern/driver",
+    "blender/source/blender/animrig/intern/evaluation",
+    "blender/source/blender/animrig/intern/evaluation_test",
+    "blender/source/blender/animrig/intern/fcurve",
+    "blender/source/blender/animrig/intern/keyframing"
+  ],
   "failed_files": [],
-  "total_converted": 0,
-  "last_run": null
+  "total_converted": 20,
+  "last_run": "2026-07-23T12:20:30.176806"
 }
