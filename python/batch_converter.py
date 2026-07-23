@@ -207,21 +207,38 @@ def find_candidate_files(manifest, max_count=20):
     processed = set(manifest.get("processed_files", []))
     candidates = []
 
-    # Priority directories for conversion (e.g. blenlib math, dna, etc.)
     source_root = os.path.join(BLENDER_DIR, "source")
     if not os.path.exists(source_root):
         print(f"Warning: Blender source directory not found at {source_root}")
         return candidates
 
-    for root, _, files in os.walk(source_root):
-        for file in sorted(files):
-            if file.endswith((".h", ".hpp", ".c", ".cpp")):
-                full_path = os.path.join(root, file)
-                rel_path = os.path.relpath(full_path, WORKSPACE_ROOT)
-                if rel_path not in processed:
-                    candidates.append((full_path, rel_path))
-                    if len(candidates) >= max_count:
-                        return candidates
+    # Priority list of core Blender modules (from most fundamental to higher-level)
+    priority_subdirs = [
+        os.path.join(source_root, "blender", "blenlib"),     # 1. Core math, memory, data structures
+        os.path.join(source_root, "blender", "makesdna"),    # 2. DNA structs (Blend file core types)
+        os.path.join(source_root, "blender", "makesrna"),    # 3. RNA reflection
+        os.path.join(source_root, "blender", "bmesh"),       # 4. BMesh geometry data structures
+        os.path.join(source_root, "blender", "blenkernel"),  # 5. Core engine logic (Object, Scene, Mesh)
+        os.path.join(source_root, "blender", "nodes"),       # 6. Geometry & Shader nodes
+    ]
+
+    all_target_dirs = [d for d in priority_subdirs if os.path.exists(d)]
+    
+    # Add remaining directories as fallback
+    for root, dirs, _ in os.walk(source_root):
+        if root not in all_target_dirs:
+            all_target_dirs.append(root)
+
+    for target_dir in all_target_dirs:
+        for root, _, files in os.walk(target_dir):
+            for file in sorted(files):
+                if file.endswith((".h", ".hpp", ".c", ".cpp")):
+                    full_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(full_path, WORKSPACE_ROOT)
+                    if rel_path not in processed:
+                        candidates.append((full_path, rel_path))
+                        if len(candidates) >= max_count:
+                            return candidates
     return candidates
 
 def main():
