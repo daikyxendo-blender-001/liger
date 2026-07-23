@@ -14,7 +14,15 @@ on:
       workers:
         description: 'Number of parallel Ollama conversion workers'
         required: true
-        default: '2'
+        default: '1'
+      request_timeout:
+        description: 'Ollama request timeout in seconds'
+        required: true
+        default: '900'
+      retries:
+        description: 'Number of retry attempts per file after an Ollama failure'
+        required: true
+        default: '1'
   schedule:
     - cron: '0 0 * * *' # Run daily at midnight
 
@@ -77,8 +85,15 @@ jobs:
         run: |
           BATCH_SIZE="${{ github.event.inputs.batch_size || '20' }}"
           MODEL="${{ github.event.inputs.model || 'qwen2.5-coder:7b' }}"
-          WORKERS="${{ github.event.inputs.workers || '2' }}"
-          python3 python/batch_converter.py --batch-size "$BATCH_SIZE" --model "$MODEL" --workers "$WORKERS"
+          WORKERS="${{ github.event.inputs.workers || '1' }}"
+          REQUEST_TIMEOUT="${{ github.event.inputs.request_timeout || '900' }}"
+          RETRIES="${{ github.event.inputs.retries || '1' }}"
+          python3 python/batch_converter.py \
+            --batch-size "$BATCH_SIZE" \
+            --model "$MODEL" \
+            --workers "$WORKERS" \
+            --request-timeout "$REQUEST_TIMEOUT" \
+            --retries "$RETRIES"
 
       - name: Auto Commit & Push Changes
         if: always()

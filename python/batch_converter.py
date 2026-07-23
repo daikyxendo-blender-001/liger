@@ -10,6 +10,7 @@ import argparse
 import urllib.request
 import urllib.error
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -39,7 +40,7 @@ def save_manifest(manifest):
     with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-def call_ollama(prompt, model="qwen2.5-coder:7b", ollama_url="http://localhost:11434"):
+def call_ollama(prompt, model="qwen2.5-coder:7b", ollama_url="http://localhost:11434", timeout=300, retries=0):
     url = f"{ollama_url.rstrip('/')}/api/generate"
     payload = {
         "model": model,
@@ -50,15 +51,21 @@ def call_ollama(prompt, model="qwen2.5-coder:7b", ollama_url="http://localhost:1
         }
     }
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=300) as response:
-            resp_body = response.read().decode("utf-8")
-            res_json = json.loads(resp_body)
-            return res_json.get("response", "")
-    except Exception as e:
-        print(f"Error calling Ollama API ({url}): {e}")
-        return None
+    attempts = retries + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            print(f"Calling Ollama API ({attempt}/{attempts}, timeout={timeout}s)...")
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                resp_body = response.read().decode("utf-8")
+                res_json = json.loads(resp_body)
+                return res_json.get("response", "")
+        except Exception as e:
+            print(f"Error calling Ollama API ({url}) on attempt {attempt}/{attempts}: {e}")
+            if attempt < attempts:
+                time.sleep(min(30, 5 * attempt))
+
+    return None
 
 def extract_code_block(llm_output):
     """Extract code inside ```rust ... ``` block if present."""
@@ -133,7 +140,13 @@ def convert_file_group(group_info, args):
 
     prompt = f"{SHORT_SYSTEM_PROMPT}\n\nC/C++ Source Code for [{key_str}]:\n```cpp\n{combined_code}\n```"
 
-    llm_response = call_ollama(prompt, model=args.model, ollama_url=args.ollama_url)
+    llm_response = call_ollama(
+        prompt,
+        model=args.model,
+        ollama_url=args.ollama_url,
+        timeout=args.request_timeout,
+        retries=args.retries,
+    )
     if not llm_response:
         print(f"Failed to get response for {key_str}")
         return False
@@ -166,8 +179,12 @@ def main():
     parser.add_argument("--model", type=str, default="qwen2.5-coder:7b", help="Ollama model name.")
     parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama API base URL.")
     parser.add_argument("--workers", type=int, default=1, help="Number of parallel conversion workers.")
+    parser.add_argument("--request-timeout", type=int, default=300, help="Ollama request timeout in seconds.")
+    parser.add_argument("--retries", type=int, default=0, help="Retry attempts per file after an Ollama failure.")
     args = parser.parse_args()
     args.workers = max(1, args.workers)
+    args.request_timeout = max(1, args.request_timeout)
+    args.retries = max(0, args.retries)
 
     manifest = load_manifest()
     candidates = find_candidate_file_groups(manifest, max_count=args.batch_size)
