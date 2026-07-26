@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "converted_manifest.json")
+REJECTED_OUTPUTS_DIR = os.path.join(os.path.dirname(__file__), "rejected_outputs")
 WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BLENDER_DIR = os.path.join(WORKSPACE_ROOT, "blender")
 SRC_DIR = os.path.join(WORKSPACE_ROOT, "src")
@@ -31,30 +32,40 @@ SHORT_SYSTEM_PROMPT = (
     "4. Output: Return ONLY the valid Rust code block inside ```rust ... ```. No explanations.\n"
 )
 
+
 def load_manifest():
     if os.path.exists(MANIFEST_PATH):
         with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"processed_files": [], "failed_files": [], "total_converted": 0, "last_run": None}
+    return {
+        "processed_files": [],
+        "failed_files": [],
+        "total_converted": 0,
+        "last_run": None,
+    }
+
 
 def save_manifest(manifest):
     manifest["last_run"] = datetime.now().isoformat()
     with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, ensure_ascii=False)
+        json.dump(manifest, f, indent=4, ensure_ascii=False)
 
-def call_ollama(prompt, model="qwen2.5-coder:14b", ollama_url="http://localhost:11434", timeout=300):
+
+def call_ollama(
+    prompt, model="qwen2.5-coder:14b", ollama_url="http://localhost:11434", timeout=300
+):
     url = f"{ollama_url.rstrip('/')}/api/generate"
     payload = {
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {
-            "temperature": 0.2
-        }
+        "options": {"temperature": 0.2},
     }
     data = json.dumps(payload).encode("utf-8")
     try:
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        req = urllib.request.Request(
+            url, data=data, headers={"Content-Type": "application/json"}
+        )
         with urllib.request.urlopen(req, timeout=timeout) as response:
             resp_body = response.read().decode("utf-8")
             res_json = json.loads(resp_body)
@@ -63,20 +74,41 @@ def call_ollama(prompt, model="qwen2.5-coder:14b", ollama_url="http://localhost:
         print(f"Error calling Ollama API ({url}): {e}")
         return None
 
+
 def extract_rust_code_block(llm_output):
-    """Extract code inside ```rust ... ``` block if present."""
-    match = re.search(r"```(?:rust|rs)\s*(.*?)\s*```", llm_output, re.DOTALL | re.IGNORECASE)
+    """Prefer code inside ```rust ... ```, but allow raw Rust that validates later."""
+    match = re.search(
+        r"```(?:rust|rs)\s*(.*?)\s*```", llm_output, re.DOTALL | re.IGNORECASE
+    )
     if match:
         return match.group(1).strip()
-    return None
+    match = re.search(r"```\s*(.*?)\s*```", llm_output, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return llm_output.strip()
+
+
+def save_rejected_output(key_str, attempt, reason, llm_output):
+    os.makedirs(REJECTED_OUTPUTS_DIR, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", key_str).strip("_")
+    path = os.path.join(REJECTED_OUTPUTS_DIR, f"{safe_name}.attempt{attempt}.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"Rejected [{key_str}] attempt {attempt}: {reason}\n\n")
+        f.write(llm_output or "")
+    print(f"Rejected response saved -> [{os.path.relpath(path, WORKSPACE_ROOT)}]")
+
 
 def validate_rust_code(rust_code):
-    if not re.search(r"\b(fn|struct|enum|impl|trait|use|mod|const|type|pub)\b", rust_code):
+    if not re.search(
+        r"\b(fn|struct|enum|impl|trait|use|mod|const|type|pub)\b", rust_code
+    ):
         return False, "output does not look like Rust code"
 
     tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".rs", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", suffix=".rs", delete=False
+        ) as f:
             tmp_path = f.name
             f.write(rust_code)
 
@@ -98,7 +130,8 @@ def validate_rust_code(rust_code):
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
-def find_candidate_file_groups(manifest, max_count=20):
+
+def find_candidate_file_groups(manifest, max_count=20, order="size"):
     processed = set(manifest.get("processed_files", []))
     source_root = os.path.join(BLENDER_DIR, "source")
     if not os.path.exists(source_root):
@@ -116,17 +149,27 @@ def find_candidate_file_groups(manifest, max_count=20):
                 base = os.path.splitext(file)[0]
                 key = (rel_dir, base)
                 if key not in groups:
-                    groups[key] = {'header': None, 'source': None, 'key_str': f"{rel_dir}/{base}"}
-                
+                    groups[key] = {
+                        'header': None,
+                        'source': None,
+                        'key_str': f"{rel_dir}/{base}",
+                        'size': 0,
+                    }
+
                 full_path = os.path.join(root, file)
+                groups[key]['size'] += os.path.getsize(full_path)
                 if ext in ('.h', '.hpp'):
                     groups[key]['header'] = full_path
                 else:
                     groups[key]['source'] = full_path
 
-    # Sort groups deterministically by path
-    sorted_keys = sorted(groups.keys(), key=lambda k: groups[k]['key_str'])
-    
+    if order == "path":
+        sorted_keys = sorted(groups.keys(), key=lambda k: groups[k]['key_str'])
+    else:
+        sorted_keys = sorted(
+            groups.keys(), key=lambda k: (groups[k]['size'], groups[k]['key_str'])
+        )
+
     candidates = []
     for key in sorted_keys:
         group_info = groups[key]
@@ -137,6 +180,7 @@ def find_candidate_file_groups(manifest, max_count=20):
                 break
 
     return candidates
+
 
 def convert_file_group(group_info, args):
     key_str = group_info['key_str']
@@ -149,11 +193,15 @@ def convert_file_group(group_info, args):
     combined_code = ""
     if header_path and os.path.exists(header_path):
         with open(header_path, "r", encoding="utf-8", errors="ignore") as f:
-            combined_code += f"// HEADER FILE: {os.path.basename(header_path)}\n" + f.read() + "\n\n"
+            combined_code += (
+                f"// HEADER FILE: {os.path.basename(header_path)}\n" + f.read() + "\n\n"
+            )
 
     if source_path and os.path.exists(source_path):
         with open(source_path, "r", encoding="utf-8", errors="ignore") as f:
-            combined_code += f"// SOURCE FILE: {os.path.basename(source_path)}\n" + f.read() + "\n"
+            combined_code += (
+                f"// SOURCE FILE: {os.path.basename(source_path)}\n" + f.read() + "\n"
+            )
 
     if not combined_code.strip():
         print(f"Skipping empty group {key_str}")
@@ -174,7 +222,9 @@ def convert_file_group(group_info, args):
                 "Do not return prose, JSON, Markdown lists, or C/C++."
             )
 
-        print(f"Calling Ollama API for {key_str} ({attempt}/{attempts}, timeout={args.request_timeout}s)...")
+        print(
+            f"Calling Ollama API for {key_str} ({attempt}/{attempts}, timeout={args.request_timeout}s)..."
+        )
         llm_response = call_ollama(
             prompt,
             model=args.model,
@@ -185,14 +235,12 @@ def convert_file_group(group_info, args):
             last_error = "empty Ollama response"
         else:
             rust_code = extract_rust_code_block(llm_response)
-            if rust_code is None:
-                last_error = "missing ```rust fenced code block"
-            else:
-                is_valid, validation_error = validate_rust_code(rust_code)
-                if is_valid:
-                    break
-                last_error = validation_error
-                rust_code = None
+            is_valid, validation_error = validate_rust_code(rust_code)
+            if is_valid:
+                break
+            last_error = validation_error
+            save_rejected_output(key_str, attempt, last_error, llm_response)
+            rust_code = None
 
         print(f"Rejected output for {key_str}: {last_error}")
         if attempt < attempts:
@@ -205,11 +253,11 @@ def convert_file_group(group_info, args):
     # Determine target output path in src/
     rel_dir = group_info['key_str'].rsplit('/', 1)[0]
     base_name = group_info['key_str'].rsplit('/', 1)[1]
-    
+
     # Remove 'blender/' prefix if present in rel_dir
     clean_dir = rel_dir
     if clean_dir.startswith("blender/"):
-        clean_dir = clean_dir[len("blender/"):]
+        clean_dir = clean_dir[len("blender/") :]
 
     target_dir = os.path.join(SRC_DIR, clean_dir)
     os.makedirs(target_dir, exist_ok=True)
@@ -222,21 +270,53 @@ def convert_file_group(group_info, args):
     print(f"SAVED -> [{os.path.relpath(target_rs_path, WORKSPACE_ROOT)}]")
     return True
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Bulk convert Blender C/C++ pairs (.h + .cpp) to Rust.")
-    parser.add_argument("--batch-size", type=int, default=20, help="Number of file pairs to convert.")
-    parser.add_argument("--model", type=str, default="qwen2.5-coder:14b", help="Ollama model name.")
-    parser.add_argument("--ollama-url", type=str, default="http://localhost:11434", help="Ollama API base URL.")
-    parser.add_argument("--workers", type=int, default=1, help="Number of parallel conversion workers.")
-    parser.add_argument("--request-timeout", type=int, default=300, help="Ollama request timeout in seconds.")
-    parser.add_argument("--retries", type=int, default=0, help="Retry attempts per file after an Ollama failure.")
+    parser = argparse.ArgumentParser(
+        description="Bulk convert Blender C/C++ pairs (.h + .cpp) to Rust."
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=20, help="Number of file pairs to convert."
+    )
+    parser.add_argument(
+        "--model", type=str, default="qwen2.5-coder:14b", help="Ollama model name."
+    )
+    parser.add_argument(
+        "--ollama-url",
+        type=str,
+        default="http://localhost:11434",
+        help="Ollama API base URL.",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=1, help="Number of parallel conversion workers."
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=int,
+        default=300,
+        help="Ollama request timeout in seconds.",
+    )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=0,
+        help="Retry attempts per file after an Ollama failure.",
+    )
+    parser.add_argument(
+        "--order",
+        choices=("size", "path"),
+        default="size",
+        help="Candidate ordering strategy.",
+    )
     args = parser.parse_args()
     args.workers = max(1, args.workers)
     args.request_timeout = max(1, args.request_timeout)
     args.retries = max(0, args.retries)
 
     manifest = load_manifest()
-    candidates = find_candidate_file_groups(manifest, max_count=args.batch_size)
+    candidates = find_candidate_file_groups(
+        manifest, max_count=args.batch_size, order=args.order
+    )
 
     if not candidates:
         print("No new C/C++ file groups found to convert!")
@@ -285,7 +365,10 @@ def main():
                     success = False
                 record_result(key_str, success)
 
-    print(f"\nBulk conversion finished. Successfully converted {converted_count}/{len(candidates)} groups.")
+    print(
+        f"\nBulk conversion finished. Successfully converted {converted_count}/{len(candidates)} groups."
+    )
+
 
 if __name__ == "__main__":
     main()
